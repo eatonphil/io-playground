@@ -2,3 +2,5 @@ main
 *.bin
 *~
 *.csv
+gobufioplayground
+*.o
