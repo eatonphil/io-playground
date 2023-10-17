@@ -60,3 +60,21 @@ And observe:
 │ 1_threads_iouring_pwrite_1_entries     │ 0.7128790843s        │ 576.5MB/s  │
 └────────────────────────────────────────┴──────────────────────┴────────────┘
 ```
+
+### Python
+
+To run:
+
+```
+$ python3 main.py
+$ duckdb -c "select column0 as method, avg(column1::double) || 's' avg_time, format_bytes(avg(column2::double)::bigint) || '/s' as throughput from 'out.csv' group by column0 order by avg(column1::double) asc"
+```
+
+```
+┌──────────┬────────────┬────────────┐
+│  method  │  avg_time  │ throughput │
+│ varchar  │  varchar   │  varchar   │
+├──────────┼────────────┼────────────┤
+│ blocking │ 0.3681182s │ 1.1GB/s    │
+└──────────┴────────────┴────────────┘
+```

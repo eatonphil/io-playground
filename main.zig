@@ -27,7 +27,7 @@ const ThreadInfo = struct {
 };
 
 const outFile = "out.bin";
-const chunkSize = 4096;
+const chunkSize: u64 = 4096;
 
 fn pwriteWorker(info: *ThreadInfo) void {
     var i: usize = info.offset;
@@ -86,19 +86,8 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
 
     var i: usize = info.offset;
     var written: i32 = 0;
-    std.debug.assert(chunkSize == 4096);
 
-    std.debug.assert(nEntries == 128 or nEntries == 1);
-
-    var copy = nEntries;
-    // I broke arithmetic in Zig.
-    // const entryChunk: u64 = chunkSize * nEntries; // this causes a nonsensical integer overflow.
-    var entryChunk: u64 = 0;
-    while (copy > 0) : (copy -= 1) {
-        entryChunk += chunkSize;
-    }
-
-    while (i < info.offset + info.workSize) : (i += entryChunk) {
+    while (i < info.offset + info.workSize) : (i += chunkSize * nEntries) {
         var j: usize = 0;
         while (j < nEntries) : (j += 1) {
             const base = i + j * chunkSize;
