@@ -41,61 +41,23 @@ func readNBytes(fn string, n int) []byte {
 	return buf
 }
 
-func withIOUringAndWorkerRoutines(x []byte, entries int, workers int) {
-	f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
+func benchmark(name string, directIO bool, x []byte, fn func(*os.File)) {
+	fmt.Printf("%s", name)
+	flags := os.O_RDWR | os.O_CREATE | os.O_TRUNC
+	if directIO {
+		flags |= syscall.O_DIRECT
+	}
+	f, err := os.OpenFile("out.bin", flags, 0755)
 	if err != nil {
 		panic(err)
 	}
 
 	t1 := time.Now()
-	chunkSize := 4096
 
-	var wg sync.WaitGroup
-	workSize := len(x) / workers
-
-	for i := 0; i < len(x); i += workSize {
-		wg.Add(1)
-		go func(i int) {
-			requests := make([]iouring.PrepRequest, entries)
-			iour, err := iouring.New(uint(entries))
-			if err != nil {
-				panic(err)
-			}
-			defer iour.Close()
-
-			defer wg.Done()
-
-			for j := i; j < i+workSize; j += chunkSize * entries {
-				for k := 0; k < entries; k++ {
-					base := j + k*chunkSize
-					if base >= i+workSize {
-						break
-					}
-					size := min(chunkSize, (i+workSize)-base)
-					requests[k] = iouring.Pwrite(int(f.Fd()), x[base:base+size], uint64(base))
-				}
-
-				res, err := iour.SubmitRequests(requests[:], nil)
-				if err != nil {
-					panic(err)
-				}
-				<-res.Done()
-
-				for _, result := range res.ErrResults() {
-					n, err := result.ReturnInt()
-					if err != nil {
-						panic(err)
-					}
-
-					assert(n == chunkSize)
-				}
-			}
-		}(i)
-	}
-	wg.Wait()
+	fn(f)
 
 	s := time.Now().Sub(t1).Seconds()
-	fmt.Printf("%d_goroutines_io_uring_pwrite_%d_entries,%f,%f\n", workers, entries, s, float64(len(x))/s)
+	fmt.Printf(",%f,%f\n", s, float64(len(x))/s)
 
 	if err := f.Close(); err != nil {
 		panic(err)
@@ -104,19 +66,99 @@ func withIOUringAndWorkerRoutines(x []byte, entries int, workers int) {
 	assert(bytes.Equal(readNBytes("out.bin", len(x)), x))
 }
 
+func withPwriteAndWorkerRoutines(directIO bool, x []byte, workers int) {
+	name := fmt.Sprintf("%d_goroutines_pwrite", workers)
+	benchmark(name, directIO, x, func(f *os.File) {
+		chunkSize := 4096
+		var wg sync.WaitGroup
+
+		workSize := len(x) / workers
+
+		for i := 0; i < len(x); i += workSize {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+
+				for j := i; j < i+workSize; j += chunkSize {
+					size := min(chunkSize, (i+workSize)-j)
+					n, err := f.WriteAt(x[j:j+size], int64(j))
+					if err != nil {
+						panic(err)
+					}
+
+					assert(n == chunkSize)
+				}
+			}(i)
+		}
+		wg.Wait()
+	})
+}
+
+func withIOUringAndWorkerRoutines(directIO bool, x []byte, entries int, workers int) {
+	name := fmt.Sprintf("%d_goroutines_io_uring_pwrite_%d_entries", workers, entries)
+	benchmark(name, directIO, x, func(f *os.File) {
+		chunkSize := 4096
+
+		var wg sync.WaitGroup
+		workSize := len(x) / workers
+
+		for i := 0; i < len(x); i += workSize {
+			wg.Add(1)
+			go func(i int) {
+				requests := make([]iouring.PrepRequest, entries)
+				iour, err := iouring.New(uint(entries))
+				if err != nil {
+					panic(err)
+				}
+				defer iour.Close()
+
+				defer wg.Done()
+
+				for j := i; j < i+workSize; j += chunkSize * entries {
+					for k := 0; k < entries; k++ {
+						base := j + k*chunkSize
+						if base >= i+workSize {
+							break
+						}
+						size := min(chunkSize, (i+workSize)-base)
+						requests[k] = iouring.Pwrite(int(f.Fd()), x[base:base+size], uint64(base))
+					}
+
+					res, err := iour.SubmitRequests(requests[:], nil)
+					if err != nil {
+						panic(err)
+					}
+					<-res.Done()
+
+					for _, result := range res.ErrResults() {
+						n, err := result.ReturnInt()
+						if err != nil {
+							panic(err)
+						}
+
+						assert(n == chunkSize)
+					}
+				}
+			}(i)
+		}
+		wg.Wait()
+	})
+}
+
 func main() {
 	size := 4096 * 100_000
 	x := readNBytes("/dev/random", size)
 
+	var directIO = false
+	for _, arg := range os.Args {
+		if arg == "--directio" {
+			directIO = true
+		}
+	}
+
 	for i := 0; i < 10; i++ {
 		// No buffering
-		func() {
-			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
-			if err != nil {
-				panic(err)
-			}
-
-			t1 := time.Now()
+		benchmark("blocking", directIO, x, func(f *os.File) {
 			chunkSize := 4096
 			for i := 0; i < len(x); i += chunkSize {
 				size := min(chunkSize, len(x)-i)
@@ -127,86 +169,16 @@ func main() {
 
 				assert(n == chunkSize)
 			}
-			s := time.Now().Sub(t1).Seconds()
-			fmt.Printf("blocking,%f,%f\n", s, float64(len(x))/s)
+		})
 
-			if err := f.Close(); err != nil {
-				panic(err)
-			}
+		withPwriteAndWorkerRoutines(directIO, x, 1)
+		withPwriteAndWorkerRoutines(directIO, x, 10)
 
-			assert(bytes.Equal(readNBytes("out.bin", len(x)), x))
-		}()
-
-		func() {
-			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
-			if err != nil {
-				panic(err)
-			}
-
-			t1 := time.Now()
-			chunkSize := 4096
-			for i := 0; i < len(x); i += chunkSize {
-				size := min(chunkSize, len(x)-i)
-				n, err := f.WriteAt(x[i:i+size], int64(i))
-				if err != nil {
-					panic(err)
-				}
-
-				assert(n == chunkSize)
-			}
-			s := time.Now().Sub(t1).Seconds()
-			fmt.Printf("1_goroutine_pwrite,%f,%f\n", s, float64(len(x))/s)
-
-			if err := f.Close(); err != nil {
-				panic(err)
-			}
-
-			assert(bytes.Equal(readNBytes("out.bin", len(x)), x))
-		}()
-
-		// With worker threads
-		func() {
-			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
-			if err != nil {
-				panic(err)
-			}
-
-			t1 := time.Now()
-			chunkSize := 4096
-			var wg sync.WaitGroup
-
-			for i := 0; i < len(x); i += chunkSize * 10_000 {
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-
-					for j := i; j < i+chunkSize*10_000; j += chunkSize {
-						size := min(chunkSize, (i+chunkSize*10_000)-j)
-						n, err := f.WriteAt(x[j:j+size], int64(j))
-						if err != nil {
-							panic(err)
-						}
-
-						assert(n == chunkSize)
-					}
-				}(i)
-			}
-			wg.Wait()
-			s := time.Now().Sub(t1).Seconds()
-			fmt.Printf("10_goroutines_pwrite,%f,%f\n", s, float64(len(x))/s)
-
-			if err := f.Close(); err != nil {
-				panic(err)
-			}
-
-			assert(bytes.Equal(readNBytes("out.bin", len(x)), x))
-		}()
-
-		withIOUringAndWorkerRoutines(x, 1, 10)
-		withIOUringAndWorkerRoutines(x, 128, 10)
-		withIOUringAndWorkerRoutines(x, 1, 100)
-		withIOUringAndWorkerRoutines(x, 128, 100)
-		withIOUringAndWorkerRoutines(x, 1, 1)
-		withIOUringAndWorkerRoutines(x, 128, 1)
+		withIOUringAndWorkerRoutines(directIO, x, 1, 10)
+		withIOUringAndWorkerRoutines(directIO, x, 128, 10)
+		withIOUringAndWorkerRoutines(directIO, x, 1, 100)
+		withIOUringAndWorkerRoutines(directIO, x, 128, 100)
+		withIOUringAndWorkerRoutines(directIO, x, 1, 1)
+		withIOUringAndWorkerRoutines(directIO, x, 128, 1)
 	}
 }
