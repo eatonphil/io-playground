@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/iceber/iouring-go"
@@ -41,7 +42,7 @@ func readNBytes(fn string, n int) []byte {
 }
 
 func withIOUringAndWorkerRoutines(x []byte, entries int, workers int) {
-	f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+	f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
 	if err != nil {
 		panic(err)
 	}
@@ -104,15 +105,13 @@ func withIOUringAndWorkerRoutines(x []byte, entries int, workers int) {
 }
 
 func main() {
-	x := readNBytes("/dev/random", 4096*100_000)
-	assert(len(x) == 4096*100_000)
-
-	//fmt.Println("type,time")
+	size := 4096 * 100_000
+	x := readNBytes("/dev/random", size)
 
 	for i := 0; i < 10; i++ {
 		// No buffering
 		func() {
-			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
 			if err != nil {
 				panic(err)
 			}
@@ -120,7 +119,8 @@ func main() {
 			t1 := time.Now()
 			chunkSize := 4096
 			for i := 0; i < len(x); i += chunkSize {
-				n, err := f.Write(x[i : i+chunkSize])
+				size := min(chunkSize, len(x)-i)
+				n, err := f.Write(x[i : i+size])
 				if err != nil {
 					panic(err)
 				}
@@ -138,7 +138,7 @@ func main() {
 		}()
 
 		func() {
-			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
 			if err != nil {
 				panic(err)
 			}
@@ -146,7 +146,8 @@ func main() {
 			t1 := time.Now()
 			chunkSize := 4096
 			for i := 0; i < len(x); i += chunkSize {
-				n, err := f.WriteAt(x[i:i+chunkSize], int64(i))
+				size := min(chunkSize, len(x)-i)
+				n, err := f.WriteAt(x[i:i+size], int64(i))
 				if err != nil {
 					panic(err)
 				}
@@ -163,38 +164,9 @@ func main() {
 			assert(bytes.Equal(readNBytes("out.bin", len(x)), x))
 		}()
 
-		// With buffering
-		// func () {
-		// 	f_, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-		// 	if err != nil {
-		// 		panic(err)
-		// 	}
-		// 	f := bufio.NewWriter(f_)
-
-		// 	t1 := time.Now()
-		// 	chunkSize := 4096
-		// 	for i := 0; i < len(x); i += chunkSize {
-		// 		n, err := f.Write(x[i:i+chunkSize])
-		// 		if err != nil {
-		// 			panic(err)
-		// 		}
-
-		// 		assert(n == chunkSize)
-		// 	}
-		// 	f.Flush()
-		// 	s := time.Now().Sub(t1).Seconds()
-		// 	fmt.Printf("buf,%f,%f\n", s, float64(len(x))/s)
-
-		// 	if err := f_.Close(); err != nil {
-		// 		panic(err)
-		// 	}
-
-		// 	assert(bytes.Equal(readNBytes("out.bin", len(x)), x))
-		// }()
-
 		// With worker threads
 		func() {
-			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+			f, err := os.OpenFile("out.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, 0755)
 			if err != nil {
 				panic(err)
 			}
@@ -209,7 +181,8 @@ func main() {
 					defer wg.Done()
 
 					for j := i; j < i+chunkSize*10_000; j += chunkSize {
-						n, err := f.WriteAt(x[j:j+chunkSize], int64(j))
+						size := min(chunkSize, (i+chunkSize*10_000)-j)
+						n, err := f.WriteAt(x[j:j+size], int64(j))
 						if err != nil {
 							panic(err)
 						}

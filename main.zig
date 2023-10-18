@@ -18,6 +18,59 @@ fn readNBytes(allocator: *const std.mem.Allocator, filename: []const u8, n: usiz
     return data;
 }
 
+fn createFile(f: []const u8, directIO: bool) !std.fs.File {
+    const file = try std.fs.cwd().createFile(f, .{
+        .truncate = true,
+    });
+
+    if (directIO) {
+        const flags: usize = try std.os.fcntl(file.handle, std.os.linux.F.GETFL, 0);
+        _ = try std.os.fcntl(file.handle, std.os.linux.F.SETFL, flags | std.os.O.DIRECT);
+    }
+    return file;
+}
+
+const Benchmark = struct {
+    t1: std.time.Instant,
+    file: std.fs.File,
+    data: []const u8,
+    allocator: *const std.mem.Allocator,
+
+    fn init(
+        allocator: *const std.mem.Allocator,
+        name: []const u8,
+        directIO: bool,
+        data: []const u8,
+    ) !Benchmark {
+        try std.io.getStdOut().writer().print("{s}", .{name});
+        if (directIO) {
+            try std.io.getStdOut().writer().print("_directio", .{});
+        }
+
+        return Benchmark{
+            .t1 = try std.time.Instant.now(),
+            .file = try createFile(outFile, directIO),
+            .data = data,
+            .allocator = allocator,
+        };
+    }
+
+    fn stop(b: Benchmark) void {
+        const t2 = std.time.Instant.now() catch unreachable;
+        const s = @as(f64, @floatFromInt(t2.since(b.t1))) / std.time.ns_per_s;
+        std.io.getStdOut().writer().print(
+            ",{d},{d}\n",
+            .{ s, @as(f64, @floatFromInt(b.data.len)) / s },
+        ) catch unreachable;
+
+        b.file.close();
+
+        var in = readNBytes(b.allocator, outFile, b.data.len) catch unreachable;
+        std.debug.assert(std.mem.eql(u8, in, b.data));
+        b.allocator.free(in);
+    }
+};
+
 const ThreadInfo = struct {
     file: *const std.fs.File,
     data: []const u8,
@@ -46,19 +99,19 @@ fn threadsAndPwrite(
     comptime nWorkers: u8,
     allocator: *const std.mem.Allocator,
     x: []const u8,
+    directIO: bool,
 ) !void {
-    const file = try std.fs.cwd().createFile(outFile, .{
-        .truncate = true,
-    });
-
-    const t1 = try std.time.Instant.now();
+    const name = try std.fmt.allocPrint(allocator.*, "{}_threads_pwrite", .{nWorkers});
+    defer allocator.free(name);
+    const b = try Benchmark.init(allocator, name, directIO, x);
+    defer b.stop();
 
     var workers: [nWorkers]std.Thread = undefined;
     var workerInfo: [nWorkers]ThreadInfo = undefined;
     const workSize = x.len / nWorkers;
     for (&workers, 0..) |*worker, i| {
         workerInfo[i] = ThreadInfo{
-            .file = &file,
+            .file = &b.file,
             .data = x,
             .offset = i * workSize,
             .workSize = workSize,
@@ -70,17 +123,6 @@ fn threadsAndPwrite(
     for (&workers) |*worker| {
         worker.join();
     }
-
-    const t2 = try std.time.Instant.now();
-    const s = @as(f64, @floatFromInt(t2.since(t1))) / std.time.ns_per_s;
-    try std.io.getStdOut().writer().print(
-        "{}_threads_pwrite,{d},{d}\n",
-        .{ nWorkers, s, @as(f64, @floatFromInt(x.len)) / s },
-    );
-
-    file.close();
-
-    std.debug.assert(std.mem.eql(u8, try readNBytes(allocator, outFile, x.len), x));
 }
 
 fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
@@ -109,8 +151,6 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
             _ = ring.write(0, info.file.handle, info.data[base .. base + size], base) catch unreachable;
         }
 
-        // In the final round of calls, there may be less than
-        // nEntries and that's ok.
         const submitted = ring.submit_and_wait(entriesSubmitted) catch unreachable;
         std.debug.assert(submitted == entriesSubmitted);
 
@@ -130,17 +170,24 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
     std.debug.assert(written == info.workSize);
 }
 
-fn threadsAndIOUringPwrite(comptime nWorkers: u8, allocator: *const std.mem.Allocator, x: []const u8, entries: u13) !void {
-    const file = try std.fs.cwd().createFile(outFile, .{ .truncate = true });
-
-    const t1 = try std.time.Instant.now();
+fn threadsAndIOUringPwrite(
+    comptime nWorkers: u8,
+    allocator: *const std.mem.Allocator,
+    x: []const u8,
+    entries: u13,
+    directIO: bool,
+) !void {
+    const name = try std.fmt.allocPrint(allocator.*, "{}_threads_iouring_pwrite_{}_entries", .{ nWorkers, entries });
+    defer allocator.free(name);
+    const b = try Benchmark.init(allocator, name, directIO, x);
+    defer b.stop();
 
     var workers: [nWorkers]std.Thread = undefined;
     var workerInfo: [nWorkers]ThreadInfo = undefined;
     const workSize = x.len / nWorkers;
     for (&workers, 0..) |*worker, i| {
         workerInfo[i] = ThreadInfo{
-            .file = &file,
+            .file = &b.file,
             .data = x,
             .offset = i * workSize,
             .workSize = workSize,
@@ -152,17 +199,6 @@ fn threadsAndIOUringPwrite(comptime nWorkers: u8, allocator: *const std.mem.Allo
     for (&workers) |*worker| {
         worker.join();
     }
-
-    const t2 = try std.time.Instant.now();
-    const s = @as(f64, @floatFromInt(t2.since(t1))) / std.time.ns_per_s;
-    try std.io.getStdOut().writer().print(
-        "{}_threads_iouring_pwrite_{}_entries,{d},{d}\n",
-        .{ nWorkers, entries, s, @as(f64, @floatFromInt(x.len)) / s },
-    );
-
-    file.close();
-
-    std.debug.assert(std.mem.eql(u8, try readNBytes(allocator, outFile, x.len), x));
 }
 
 pub fn main() !void {
@@ -173,41 +209,37 @@ pub fn main() !void {
 
     std.debug.assert(x.len == 4096 * 100_000);
 
+    var args = std.process.args();
+    var directIO = false;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--directio")) {
+            directIO = true;
+        }
+    }
+
     var run: usize = 0;
     while (run < 10) : (run += 1) {
         {
-            const file = try std.fs.cwd().createFile(outFile, .{ .truncate = true });
-
-            const t1 = try std.time.Instant.now();
+            const b = try Benchmark.init(allocator, "blocking", directIO, x);
+            defer b.stop();
 
             var i: usize = 0;
             while (i < x.len) : (i += chunkSize) {
-                const n = try file.write(x[i .. i + chunkSize]);
+                const n = try b.file.write(x[i .. i + chunkSize]);
                 std.debug.assert(n == chunkSize);
             }
-
-            const t2 = try std.time.Instant.now();
-            const s = @as(f64, @floatFromInt(t2.since(t1))) / std.time.ns_per_s;
-            try std.io.getStdOut().writer().print(
-                "blocking,{d},{d}\n",
-                .{ s, @as(f64, @floatFromInt(x.len)) / s },
-            );
-
-            file.close();
-
-            std.debug.assert(std.mem.eql(u8, try readNBytes(allocator, outFile, x.len), x));
         }
 
-        try threadsAndPwrite(1, allocator, x);
-        try threadsAndPwrite(10, allocator, x);
+        try threadsAndPwrite(1, allocator, x, directIO);
+        try threadsAndPwrite(10, allocator, x, directIO);
 
-        try threadsAndIOUringPwrite(1, allocator, x, 1);
-        try threadsAndIOUringPwrite(1, allocator, x, 128);
+        try threadsAndIOUringPwrite(1, allocator, x, 1, directIO);
+        try threadsAndIOUringPwrite(1, allocator, x, 128, directIO);
 
-        try threadsAndIOUringPwrite(10, allocator, x, 1);
-        try threadsAndIOUringPwrite(10, allocator, x, 128);
+        try threadsAndIOUringPwrite(10, allocator, x, 1, directIO);
+        try threadsAndIOUringPwrite(10, allocator, x, 128, directIO);
 
-        try threadsAndIOUringPwrite(100, allocator, x, 1);
-        try threadsAndIOUringPwrite(100, allocator, x, 128);
+        try threadsAndIOUringPwrite(100, allocator, x, 1, directIO);
+        try threadsAndIOUringPwrite(100, allocator, x, 128, directIO);
     }
 }
