@@ -49,15 +49,15 @@ And observe:
 │                 method                 │       avg_time       │ throughput │
 │                varchar                 │       varchar        │  varchar   │
 ├────────────────────────────────────────┼──────────────────────┼────────────┤
-│ blocking                               │ 0.2620964682s        │ 1.5GB/s    │
-│ 1_threads_pwrite                       │ 0.2664669307s        │ 1.5GB/s    │
-│ 10_threads_pwrite                      │ 0.3152884659s        │ 1.2GB/s    │
-│ 1_threads_iouring_pwrite_128_entries   │ 0.332853636s         │ 1.2GB/s    │
-│ 10_threads_iouring_pwrite_128_entries  │ 0.34393276060000005s │ 1.1GB/s    │
-│ 100_threads_iouring_pwrite_128_entries │ 0.3554842698s        │ 1.1GB/s    │
-│ 10_threads_iouring_pwrite_1_entries    │ 0.4295826038s        │ 953.7MB/s  │
-│ 100_threads_iouring_pwrite_1_entries   │ 0.45531048200000007s │ 899.8MB/s  │
-│ 1_threads_iouring_pwrite_1_entries     │ 0.7128790843s        │ 576.5MB/s  │
+│ blocking                               │ 0.25919777499999996s │ 1.5GB/s    │
+│ 1_threads_pwrite                       │ 0.2628526646s        │ 1.5GB/s    │
+│ 1_threads_iouring_pwrite_128_entries   │ 0.2904007039s        │ 1.4GB/s    │
+│ 10_threads_pwrite                      │ 0.31145840399999997s │ 1.3GB/s    │
+│ 10_threads_iouring_pwrite_128_entries  │ 0.3267872654s        │ 1.2GB/s    │
+│ 100_threads_iouring_pwrite_128_entries │ 0.3439633456s        │ 1.1GB/s    │
+│ 10_threads_iouring_pwrite_1_entries    │ 0.4184023098s        │ 979.1MB/s  │
+│ 100_threads_iouring_pwrite_1_entries   │ 0.43764305200000003s │ 936.1MB/s  │
+│ 1_threads_iouring_pwrite_1_entries     │ 0.7170916496s        │ 572.5MB/s  │
 └────────────────────────────────────────┴──────────────────────┴────────────┘
 ```
 
