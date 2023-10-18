@@ -42,8 +42,14 @@ fn pwriteWorker(info: *ThreadInfo) void {
     std.debug.assert(written == info.workSize);
 }
 
-fn threadsAndPwrite(comptime nWorkers: u8, allocator: *const std.mem.Allocator, x: []const u8) !void {
-    const file = try std.fs.cwd().createFile(outFile, .{ .truncate = true });
+fn threadsAndPwrite(
+    comptime nWorkers: u8,
+    allocator: *const std.mem.Allocator,
+    x: []const u8,
+) !void {
+    const file = try std.fs.cwd().createFile(outFile, .{
+        .truncate = true,
+    });
 
     const t1 = try std.time.Instant.now();
 
@@ -87,25 +93,31 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
     var i: usize = info.offset;
     var written: i32 = 0;
 
+    var cqes = info.allocator.alloc(std.os.linux.io_uring_cqe, nEntries) catch unreachable;
+    defer info.allocator.free(cqes);
+
     while (i < info.offset + info.workSize) : (i += chunkSize * nEntries) {
         var j: usize = 0;
+        var entriesSubmitted: u32 = 0;
         while (j < nEntries) : (j += 1) {
             const base = i + j * chunkSize;
             if (base >= info.offset + info.workSize) {
                 break;
             }
+            entriesSubmitted += 1;
             const size = @min(chunkSize, (info.offset + info.workSize) - base);
             _ = ring.write(0, info.file.handle, info.data[base .. base + size], base) catch unreachable;
         }
 
         // In the final round of calls, there may be less than
         // nEntries and that's ok.
-        const submitted = ring.submit() catch unreachable;
-        std.debug.assert(submitted <= nEntries);
+        const submitted = ring.submit_and_wait(entriesSubmitted) catch unreachable;
+        std.debug.assert(submitted == entriesSubmitted);
 
-        var entries: usize = 0;
-        while (entries < submitted) : (entries += 1) {
-            const cqe = ring.copy_cqe() catch unreachable;
+        const waited = ring.copy_cqes(cqes[0..submitted], submitted) catch unreachable;
+        std.debug.assert(waited == submitted);
+
+        for (cqes[0..submitted]) |*cqe| {
             if (cqe.err() != .SUCCESS) {
                 @panic("Request failed");
             }
