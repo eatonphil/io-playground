@@ -31,7 +31,7 @@ fn createFile(f: []const u8, directIO: bool) !std.fs.File {
 }
 
 const Benchmark = struct {
-    t1: std.time.Instant,
+    t: std.time.Timer,
     file: std.fs.File,
     data: []const u8,
     allocator: *const std.mem.Allocator,
@@ -47,17 +47,18 @@ const Benchmark = struct {
             try std.io.getStdOut().writer().print("_directio", .{});
         }
 
+        var file = try createFile(outFile, directIO);
+
         return Benchmark{
-            .t1 = try std.time.Instant.now(),
-            .file = try createFile(outFile, directIO),
+            .t = try std.time.Timer.start(),
+            .file = file,
             .data = data,
             .allocator = allocator,
         };
     }
 
-    fn stop(b: Benchmark) void {
-        const t2 = std.time.Instant.now() catch unreachable;
-        const s = @as(f64, @floatFromInt(t2.since(b.t1))) / std.time.ns_per_s;
+    fn stop(b: *Benchmark) void {
+        const s = @as(f64, @floatFromInt(b.t.read())) / std.time.ns_per_s;
         std.io.getStdOut().writer().print(
             ",{d},{d}\n",
             .{ s, @as(f64, @floatFromInt(b.data.len)) / s },
@@ -80,7 +81,7 @@ const ThreadInfo = struct {
 };
 
 const outFile = "out.bin";
-const chunkSize: u64 = 4096;
+const chunkSize: u64 = 4096; // 1048576; // 1mib
 
 fn pwriteWorker(info: *ThreadInfo) void {
     var i: usize = info.offset;
@@ -103,7 +104,7 @@ fn threadsAndPwrite(
 ) !void {
     const name = try std.fmt.allocPrint(allocator.*, "{}_threads_pwrite", .{nWorkers});
     defer allocator.free(name);
-    const b = try Benchmark.init(allocator, name, directIO, x);
+    var b = try Benchmark.init(allocator, name, directIO, x);
     defer b.stop();
 
     var workers: [nWorkers]std.Thread = undefined;
@@ -179,7 +180,7 @@ fn threadsAndIOUringPwrite(
 ) !void {
     const name = try std.fmt.allocPrint(allocator.*, "{}_threads_iouring_pwrite_{}_entries", .{ nWorkers, entries });
     defer allocator.free(name);
-    const b = try Benchmark.init(allocator, name, directIO, x);
+    var b = try Benchmark.init(allocator, name, directIO, x);
     defer b.stop();
 
     var workers: [nWorkers]std.Thread = undefined;
@@ -220,13 +221,14 @@ pub fn main() !void {
     var run: usize = 0;
     while (run < 10) : (run += 1) {
         {
-            const b = try Benchmark.init(allocator, "blocking", directIO, x);
+            var b = try Benchmark.init(allocator, "blocking", directIO, x);
             defer b.stop();
 
             var i: usize = 0;
             while (i < x.len) : (i += chunkSize) {
-                const n = try b.file.write(x[i .. i + chunkSize]);
-                std.debug.assert(n == chunkSize);
+                const size = @min(chunkSize, x.len - i);
+                const n = try b.file.write(x[i .. i + size]);
+                std.debug.assert(n == size);
             }
         }
 
