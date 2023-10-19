@@ -69,7 +69,15 @@ And observe (run the duckdb command above):
 
 ### Zig
 
-Identical methods, basically similar results.
+Mostly identical implementation, mostly identical results.
+
+However! The Go code's io_uring implementation is a bit slower because
+it batches N entries and then waits for all N entries to
+complete. That wastes time. The Zig code never waits for N entries to
+complete. It will just always try to add more entries if space is
+available and deal with completed entries when the time is right.
+
+I'll fix that shortly.
 
 To run:
 
@@ -82,20 +90,20 @@ $ duckdb -c "select column0 as method, avg(column1::double) || 's' avg_time, for
 And observe:
 
 ```
-┌────────────────────────────────────────┬────────────────────────┬────────────────┐
-│                 method                 │        avg_time        │ avg_throughput │
-│                varchar                 │        varchar         │    varchar     │
-├────────────────────────────────────────┼────────────────────────┼────────────────┤
-│ blocking                               │ 0.0025310275000000005s │ 1.6GB/s        │
-│ 1_threads_iouring_pwrite_128_entries   │ 0.0026212824s          │ 1.5GB/s        │
-│ 1_threads_pwrite                       │ 0.0026612088s          │ 1.5GB/s        │
-│ 1_threads_iouring_pwrite_1_entries     │ 0.0026766149999999994s │ 1.5GB/s        │
-│ 10_threads_pwrite                      │ 0.0034216290999999994s │ 1.2GB/s        │
-│ 10_threads_iouring_pwrite_1_entries    │ 0.006278600800000001s  │ 713.2MB/s      │
-│ 10_threads_iouring_pwrite_128_entries  │ 0.0105393421s          │ 595.9MB/s      │
-│ 100_threads_iouring_pwrite_128_entries │ 0.038592396s           │ 130.0MB/s      │
-│ 100_threads_iouring_pwrite_1_entries   │ 0.03884590739999999s   │ 141.7MB/s      │
-└────────────────────────────────────────┴────────────────────────┴────────────────┘
+┌────────────────────────────────────────┬─────────────────────┬────────────────┐
+│                 method                 │      avg_time       │ avg_throughput │
+│                varchar                 │       varchar       │    varchar     │
+├────────────────────────────────────────┼─────────────────────┼────────────────┤
+│ 1_threads_iouring_pwrite_128_entries   │ 0.6080365773999998s │ 1.7GB/s        │
+│ 1_threads_iouring_pwrite_1_entries     │ 0.6259650676999999s │ 1.7GB/s        │
+│ blocking                               │ 0.6740227804s       │ 1.5GB/s        │
+│ 1_threads_pwrite                       │ 0.6846085126999999s │ 1.5GB/s        │
+│ 10_threads_pwrite                      │ 1.1549885629000003s │ 929.8MB/s      │
+│ 10_threads_iouring_pwrite_1_entries    │ 2.4174379148s       │ 445.7MB/s      │
+│ 10_threads_iouring_pwrite_128_entries  │ 2.4178504731s       │ 445.8MB/s      │
+│ 100_threads_iouring_pwrite_128_entries │ 3.6317807736s       │ 296.6MB/s      │
+│ 100_threads_iouring_pwrite_1_entries   │ 3.7681755905000003s │ 287.7MB/s      │
+└────────────────────────────────────────┴─────────────────────┴────────────────┘
 ```
 
 ### Python
