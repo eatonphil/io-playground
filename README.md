@@ -82,20 +82,20 @@ $ duckdb -c "select column0 as method, avg(column1::double) || 's' avg_time, for
 And observe:
 
 ```
-┌────────────────────────────────────────┬─────────────────────┬────────────────┐
-│                 method                 │      avg_time       │ avg_throughput │
-│                varchar                 │       varchar       │    varchar     │
-├────────────────────────────────────────┼─────────────────────┼────────────────┤
-│ blocking                               │ 0.6788001257000001s │ 1.5GB/s        │
-│ 1_threads_pwrite                       │ 0.6871671729s       │ 1.5GB/s        │
-│ 1_threads_iouring_pwrite_128_entries   │ 0.7417661245s       │ 1.4GB/s        │
-│ 10_threads_pwrite                      │ 1.2080025256s       │ 901.7MB/s      │
-│ 100_threads_iouring_pwrite_128_entries │ 1.2478965397s       │ 860.5MB/s      │
-│ 10_threads_iouring_pwrite_128_entries  │ 1.2701446231999998s │ 865.7MB/s      │
-│ 10_threads_iouring_pwrite_1_entries    │ 1.4864661669s       │ 722.4MB/s      │
-│ 100_threads_iouring_pwrite_1_entries   │ 1.5974781638s       │ 672.5MB/s      │
-│ 1_threads_iouring_pwrite_1_entries     │ 1.9557540579999997s │ 555.8MB/s      │
-└────────────────────────────────────────┴─────────────────────┴────────────────┘
+┌────────────────────────────────────────┬────────────────────────┬────────────────┐
+│                 method                 │        avg_time        │ avg_throughput │
+│                varchar                 │        varchar         │    varchar     │
+├────────────────────────────────────────┼────────────────────────┼────────────────┤
+│ blocking                               │ 0.0025310275000000005s │ 1.6GB/s        │
+│ 1_threads_iouring_pwrite_128_entries   │ 0.0026212824s          │ 1.5GB/s        │
+│ 1_threads_pwrite                       │ 0.0026612088s          │ 1.5GB/s        │
+│ 1_threads_iouring_pwrite_1_entries     │ 0.0026766149999999994s │ 1.5GB/s        │
+│ 10_threads_pwrite                      │ 0.0034216290999999994s │ 1.2GB/s        │
+│ 10_threads_iouring_pwrite_1_entries    │ 0.006278600800000001s  │ 713.2MB/s      │
+│ 10_threads_iouring_pwrite_128_entries  │ 0.0105393421s          │ 595.9MB/s      │
+│ 100_threads_iouring_pwrite_128_entries │ 0.038592396s           │ 130.0MB/s      │
+│ 100_threads_iouring_pwrite_1_entries   │ 0.03884590739999999s   │ 141.7MB/s      │
+└────────────────────────────────────────┴────────────────────────┴────────────────┘
 ```
 
 ### Python
