@@ -155,7 +155,9 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
             totalSubs += 1;
         }
 
-        _ = ring.submit_and_wait(0) catch unreachable;
+        // Submit and do not block. We'll read whatever's available
+        // each time through.
+        _ = ring.submit() catch unreachable;
 
         const received = ring.copy_cqes(cqes, 0) catch unreachable;
 

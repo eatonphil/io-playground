@@ -42,13 +42,17 @@ $ dd if=/dev/zero of=test.bin bs=4k count=1M
 
 ### Go
 
-To run:
+This version reads up to N entries but then blocks until all N entries
+complete. This is not ideal. But I'm not sure Iceber/iouring-go
+supports anything else.
+
+First:
 
 ```
 $ go run main.go | tee out.csv
 ```
 
-And observe (run the duckdb command above):
+Then run the DuckDB command from above:
 
 ```
 ┌────────────────────────────────────────────┬─────────────────────┬────────────────┐
@@ -69,25 +73,19 @@ And observe (run the duckdb command above):
 
 ### Zig
 
-Mostly identical implementation, mostly identical results.
+Unlike the Go implementation, this version does not batch only/always
+N entries at a time. It starts out batching N entries at a time but
+*does not block* waiting for all N to complete. Instead it just reads
+what has completed and keeps trying to add more entry batches.
 
-However! The Go code's io_uring implementation is a bit slower because
-it batches N entries and then waits for all N entries to
-complete. That wastes time. The Zig code never waits for N entries to
-complete. It will just always try to add more entries if space is
-available and deal with completed entries when the time is right.
-
-I'll fix that shortly.
-
-To run:
+First:
 
 ```
 $ zig build-exe main.zig
-$ ./main
-$ duckdb -c "select column0 as method, avg(column1::double) || 's' avg_time, format_bytes(avg(column2::double)::bigint) || '/s' as avg_throughput from 'out.csv' group by column0 order by avg(column1::double) asc"
+$ ./main | tee out.csv
 ```
 
-And observe:
+Then run the DuckDB command from above:
 
 ```
 ┌────────────────────────────────────────┬─────────────────────┬────────────────┐
@@ -108,12 +106,13 @@ And observe:
 
 ### Python
 
-To run:
+First:
 
 ```
-$ python3 main.py
-$ duckdb -c "select column0 as method, avg(column1::double) || 's' avg_time, format_bytes(avg(column2::double)::bigint) || '/s' as avg_throughput from 'out.csv' group by column0 order by avg(column1::double) asc"
+$ python3 main.py | tee out.csv
 ```
+
+Then run the DuckDB command from above:
 
 ```
 ┌──────────┬────────────┬────────────────┐
