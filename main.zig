@@ -134,36 +134,38 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
     defer ring.deinit();
 
     var i: usize = info.offset;
-    var written: i32 = 0;
+    var written: usize = 0;
 
     var cqes = info.allocator.alloc(std.os.linux.io_uring_cqe, nEntries) catch unreachable;
     defer info.allocator.free(cqes);
 
-    while (i < info.offset + info.workSize) : (i += bufferSize * nEntries) {
-        var j: usize = 0;
-        var entriesSubmitted: u32 = 0;
-        while (j < nEntries) : (j += 1) {
-            const base = i + j * bufferSize;
-            if (base >= info.offset + info.workSize) {
+    var totalSubs: usize = 0;
+    while (i < info.offset + info.workSize or written < info.workSize) {
+        // Fill in as many submissions as we can.
+        while (true) {
+            if (i >= info.offset + info.workSize) {
                 break;
             }
-            entriesSubmitted += 1;
-            const size = @min(bufferSize, (info.offset + info.workSize) - base);
-            _ = ring.write(0, info.file.handle, info.data[base .. base + size], base) catch unreachable;
+            const size = @min(bufferSize, (info.offset + info.workSize) - i);
+            _ = ring.write(0, info.file.handle, info.data[i .. i + size], i) catch |e| switch (e) {
+                error.SubmissionQueueFull => break,
+                else => unreachable,
+            };
+            i += size;
+            totalSubs += 1;
         }
 
-        const submitted = ring.submit_and_wait(entriesSubmitted) catch unreachable;
-        std.debug.assert(submitted == entriesSubmitted);
+        _ = ring.submit_and_wait(0) catch unreachable;
 
-        const waited = ring.copy_cqes(cqes[0..submitted], submitted) catch unreachable;
-        std.debug.assert(waited == submitted);
+        const received = ring.copy_cqes(cqes, 0) catch unreachable;
 
-        for (cqes[0..submitted]) |*cqe| {
+        for (cqes[0..received]) |*cqe| {
             if (cqe.err() != .SUCCESS) {
                 @panic("Request failed");
             }
 
-            const n = cqe.res;
+            std.debug.assert(cqe.res >= 0);
+            const n = @as(usize, @intCast(cqe.res));
             written += n;
             std.debug.assert(n <= bufferSize);
         }
