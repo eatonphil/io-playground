@@ -81,16 +81,16 @@ const ThreadInfo = struct {
 };
 
 const outFile = "out.bin";
-const chunkSize: u64 = 4096; // 1048576; // 1mib
+const bufferSize: u64 = 4096; // 1048576; // 1mib
 
 fn pwriteWorker(info: *ThreadInfo) void {
     var i: usize = info.offset;
     var written: usize = 0;
-    while (i < info.offset + info.workSize) : (i += chunkSize) {
-        const size = @min(chunkSize, (info.offset + info.workSize) - i);
+    while (i < info.offset + info.workSize) : (i += bufferSize) {
+        const size = @min(bufferSize, (info.offset + info.workSize) - i);
         const n = info.file.pwrite(info.data[i .. i + size], i) catch unreachable;
         written += n;
-        std.debug.assert(n <= chunkSize);
+        std.debug.assert(n <= bufferSize);
         std.debug.assert(n == size);
     }
     std.debug.assert(written == info.workSize);
@@ -139,16 +139,16 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
     var cqes = info.allocator.alloc(std.os.linux.io_uring_cqe, nEntries) catch unreachable;
     defer info.allocator.free(cqes);
 
-    while (i < info.offset + info.workSize) : (i += chunkSize * nEntries) {
+    while (i < info.offset + info.workSize) : (i += bufferSize * nEntries) {
         var j: usize = 0;
         var entriesSubmitted: u32 = 0;
         while (j < nEntries) : (j += 1) {
-            const base = i + j * chunkSize;
+            const base = i + j * bufferSize;
             if (base >= info.offset + info.workSize) {
                 break;
             }
             entriesSubmitted += 1;
-            const size = @min(chunkSize, (info.offset + info.workSize) - base);
+            const size = @min(bufferSize, (info.offset + info.workSize) - base);
             _ = ring.write(0, info.file.handle, info.data[base .. base + size], base) catch unreachable;
         }
 
@@ -165,7 +165,7 @@ fn pwriteIOUringWorker(info: *ThreadInfo, nEntries: u13) void {
 
             const n = cqe.res;
             written += n;
-            std.debug.assert(n <= chunkSize);
+            std.debug.assert(n <= bufferSize);
         }
     }
     std.debug.assert(written == info.workSize);
@@ -205,10 +205,9 @@ fn threadsAndIOUringPwrite(
 pub fn main() !void {
     var allocator = &std.heap.page_allocator;
 
-    var x = try readNBytes(allocator, "/dev/random", 4096 * 100_000);
+    const SIZE = 1073741824; // 1GiB
+    var x = try readNBytes(allocator, "/dev/random", SIZE);
     defer allocator.free(x);
-
-    std.debug.assert(x.len == 4096 * 100_000);
 
     var args = std.process.args();
     var directIO = false;
@@ -225,8 +224,8 @@ pub fn main() !void {
             defer b.stop();
 
             var i: usize = 0;
-            while (i < x.len) : (i += chunkSize) {
-                const size = @min(chunkSize, x.len - i);
+            while (i < x.len) : (i += bufferSize) {
+                const size = @min(bufferSize, x.len - i);
                 const n = try b.file.write(x[i .. i + size]);
                 std.debug.assert(n == size);
             }

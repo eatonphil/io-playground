@@ -14,7 +14,7 @@ def read_n_bytes(fn, want):
     return bytes
 
 def main():
-    x = read_n_bytes("/dev/random", 4096 * 100_000)
+    x = read_n_bytes("/dev/random", 2**30)
 
     for _ in range(10):
         with open("out.bin", "wb") as f:

@@ -17,6 +17,8 @@ func assert(b bool) {
 	}
 }
 
+const bufferSize = 4096
+
 func readNBytes(fn string, n int) []byte {
 	f, err := os.Open(fn)
 	if err != nil {
@@ -24,21 +26,21 @@ func readNBytes(fn string, n int) []byte {
 	}
 	defer f.Close()
 
-	buf := make([]byte, 0, n)
+	data := make([]byte, 0, n)
 
-	var chunk = make([]byte, 4096)
-	for len(buf) < n {
-		read, err := f.Read(chunk)
+	var buffer = make([]byte, bufferSize)
+	for len(data) < n {
+		read, err := f.Read(buffer)
 		if err != nil {
 			panic(err)
 		}
 
-		buf = append(buf, chunk[:read]...)
+		data = append(data, buffer[:read]...)
 	}
 
-	assert(len(buf) == n)
+	assert(len(data) == n)
 
-	return buf
+	return data
 }
 
 func benchmark(name string, directIO bool, x []byte, fn func(*os.File)) {
@@ -69,7 +71,6 @@ func benchmark(name string, directIO bool, x []byte, fn func(*os.File)) {
 func withPwriteAndWorkerRoutines(directIO bool, x []byte, workers int) {
 	name := fmt.Sprintf("%d_goroutines_pwrite", workers)
 	benchmark(name, directIO, x, func(f *os.File) {
-		chunkSize := 4096
 		var wg sync.WaitGroup
 
 		workSize := len(x) / workers
@@ -79,14 +80,17 @@ func withPwriteAndWorkerRoutines(directIO bool, x []byte, workers int) {
 			go func(i int) {
 				defer wg.Done()
 
-				for j := i; j < i+workSize; j += chunkSize {
-					size := min(chunkSize, (i+workSize)-j)
+				for j := i; j < i+workSize; j += bufferSize {
+					if j >= i+workSize || j >= len(x) {
+						break
+					}
+					size := min(min(bufferSize, (i+workSize)-j), len(x)-j)
 					n, err := f.WriteAt(x[j:j+size], int64(j))
 					if err != nil {
 						panic(err)
 					}
 
-					assert(n == chunkSize)
+					assert(n == size)
 				}
 			}(i)
 		}
@@ -97,8 +101,6 @@ func withPwriteAndWorkerRoutines(directIO bool, x []byte, workers int) {
 func withIOUringAndWorkerRoutines(directIO bool, x []byte, entries int, workers int) {
 	name := fmt.Sprintf("%d_goroutines_io_uring_pwrite_%d_entries", workers, entries)
 	benchmark(name, directIO, x, func(f *os.File) {
-		chunkSize := 4096
-
 		var wg sync.WaitGroup
 		workSize := len(x) / workers
 
@@ -114,17 +116,28 @@ func withIOUringAndWorkerRoutines(directIO bool, x []byte, entries int, workers 
 
 				defer wg.Done()
 
-				for j := i; j < i+workSize; j += chunkSize * entries {
+				for j := i; j < i+workSize; j += bufferSize * entries {
+					submittedEntries := 0
 					for k := 0; k < entries; k++ {
-						base := j + k*chunkSize
-						if base >= i+workSize {
+						base := j + k*bufferSize
+						if base >= i+workSize || base >= len(x) {
 							break
 						}
-						size := min(chunkSize, (i+workSize)-base)
+						submittedEntries++
+						size := min(min(bufferSize, (i+workSize)-base), len(x)-base)
 						requests[k] = iouring.Pwrite(int(f.Fd()), x[base:base+size], uint64(base))
 					}
 
-					res, err := iour.SubmitRequests(requests[:], nil)
+					// Unclear how to me this is a
+					// case that happens but it
+					// does. If we don't break
+					// here it locks forever at
+					// <-res.Done().
+					if submittedEntries == 0 {
+						continue
+					}
+
+					res, err := iour.SubmitRequests(requests[:submittedEntries], nil)
 					if err != nil {
 						panic(err)
 					}
@@ -136,7 +149,7 @@ func withIOUringAndWorkerRoutines(directIO bool, x []byte, entries int, workers 
 							panic(err)
 						}
 
-						assert(n == chunkSize)
+						assert(n == bufferSize)
 					}
 				}
 			}(i)
@@ -146,7 +159,7 @@ func withIOUringAndWorkerRoutines(directIO bool, x []byte, entries int, workers 
 }
 
 func main() {
-	size := 4096 * 100_000
+	size := 1073741824 // 1GiB
 	x := readNBytes("/dev/random", size)
 
 	var directIO = false
@@ -159,15 +172,14 @@ func main() {
 	for i := 0; i < 10; i++ {
 		// No buffering
 		benchmark("blocking", directIO, x, func(f *os.File) {
-			chunkSize := 4096
-			for i := 0; i < len(x); i += chunkSize {
-				size := min(chunkSize, len(x)-i)
+			for i := 0; i < len(x); i += bufferSize {
+				size := min(bufferSize, len(x)-i)
 				n, err := f.Write(x[i : i+size])
 				if err != nil {
 					panic(err)
 				}
 
-				assert(n == chunkSize)
+				assert(n == bufferSize)
 			}
 		})
 
