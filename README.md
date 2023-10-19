@@ -45,7 +45,7 @@ $ dd if=/dev/zero of=test.bin bs=4k count=1M
 To run:
 
 ```
-$ go run main.go 2>&1 | tee out.csv
+$ go run main.go | tee out.csv
 ```
 
 And observe (run the duckdb command above):
